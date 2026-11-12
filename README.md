@@ -32,6 +32,7 @@ To see it catch a change, edit a number in one of the files (an entry's `amountC
 - **The chain:** every entry's hash matches its contents, and links to the entry before it.
 - **The checkpoint:** the entry with the checkpoint's id has the checkpoint's hash.
 - **The rules,** when every entry is in the current format: no one gives more than $365 in a rolling year, no one casts more votes than they've received, each cycle's tally matches its votes, and pools and ties are split as stated.
+- **Matching grants:** each match is exactly what its published pledge allows (its ratio of the dollars Agents of Change brought into that month's pool, up to its ceiling and the partner's balance, less the operator fee), and no partner is returned more than its balance.
 
 Names, email addresses and payment references are never published. Each giver appears under a pseudonym, and the private fields of each entry are sealed under a hash that the giver's own receipt can open. Entries from before the current format show only their id, links and hash.
 

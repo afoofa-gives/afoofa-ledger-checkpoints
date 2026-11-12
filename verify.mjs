@@ -128,6 +128,36 @@ function checkRules(entries) {
   const closed = /* @__PURE__ */ new Map();
   const awards = /* @__PURE__ */ new Map();
   const paid = /* @__PURE__ */ new Map();
+  const partnerBalance = /* @__PURE__ */ new Map();
+  const pledges = /* @__PURE__ */ new Map();
+  const pendingMatches = /* @__PURE__ */ new Map();
+  const matched = /* @__PURE__ */ new Map();
+  let rateInForce = null;
+  const checkMatches = (closing, cycleId) => {
+    const applied = pendingMatches.get(cycleId) ?? [];
+    pendingMatches.delete(cycleId);
+    const list = pledges.get(cycleId) ?? [];
+    if (!list.length && !applied.length) return;
+    const rate = applied.length ? int(applied[0].payload.rateBps) : rateInForce ?? 1e3;
+    if (rate < 100 || rate > 1e3 || rateInForce !== null && rate !== rateInForce || applied.some((a) => int(a.payload.rateBps) !== rate)) {
+      problems.push({ entryId: closing.id, check: "matches", message: `${cycleId}'s matches use the wrong operator fee rate` });
+    }
+    let base = Math.max(0, accrued.get(cycleId) ?? 0);
+    const expected = [];
+    for (const pl of list) {
+      const target = Math.floor(base * pl.ratioBps / 1e4);
+      const gross = Math.max(0, Math.min(target, pl.ceilingCents, partnerBalance.get(pl.partnerId) ?? 0));
+      if (gross === 0) continue;
+      partnerBalance.set(pl.partnerId, (partnerBalance.get(pl.partnerId) ?? 0) - gross);
+      base -= Math.min(base, Math.ceil(gross * 1e4 / pl.ratioBps));
+      expected.push({ pledgeId: pl.pledgeId, gross, fee: Math.floor(gross * rate / 1e4) });
+    }
+    const got = applied.map((a) => ({ pledgeId: String(a.payload.pledgeId), gross: int(a.payload.grossAppliedCents), fee: int(a.payload.operatorFeeCents) }));
+    if (canonicalJson(got) !== canonicalJson(expected) || applied.some((a) => a.amountCents !== int(a.payload.grossAppliedCents) - int(a.payload.operatorFeeCents))) {
+      problems.push({ entryId: closing.id, check: "matches", message: `${cycleId}'s matching grants don't follow from its pledges` });
+    }
+    matched.set(cycleId, applied.reduce((s, a) => s + a.amountCents, 0));
+  };
   for (const e of entries) {
     const p = e.payload;
     switch (e.entryType) {
@@ -146,6 +176,37 @@ function checkRules(entries) {
             problems.push({ entryId: e.id, check: "cap", message: `${e.account} reaches $${inWindow} in a rolling year` });
           }
         }
+        break;
+      }
+      case "fee_tier_evaluated":
+        rateInForce = int(p.rateBps);
+        break;
+      case "match_received": {
+        const net = int(p.netCents);
+        if (net !== e.amountCents - int(p.processingFeeCents) || net < 0) {
+          problems.push({ entryId: e.id, check: "matches", message: "a matching payment's net isn't its gross less Stripe's fee" });
+        }
+        partnerBalance.set(String(p.partnerId), (partnerBalance.get(String(p.partnerId)) ?? 0) + net);
+        break;
+      }
+      case "match_pledged": {
+        if (!e.cycleId || closed.has(e.cycleId)) problems.push({ entryId: e.id, check: "matches", message: `a pledge on ${e.cycleId}, which is already closed` });
+        const list = pledges.get(e.cycleId ?? "") ?? [];
+        list.push({ pledgeId: String(p.pledgeId), partnerId: String(p.partnerId), ratioBps: int(p.ratioBps), ceilingCents: int(p.ceilingCents) });
+        pledges.set(e.cycleId ?? "", list);
+        break;
+      }
+      case "match_applied": {
+        const list = pendingMatches.get(e.cycleId ?? "") ?? [];
+        list.push(e);
+        pendingMatches.set(e.cycleId ?? "", list);
+        break;
+      }
+      case "match_returned": {
+        const id = String(p.partnerId);
+        const balance = (partnerBalance.get(id) ?? 0) - e.amountCents;
+        if (e.amountCents <= 0 || balance < 0) problems.push({ entryId: e.id, check: "matches", message: `${id} is returned more than its balance` });
+        partnerBalance.set(id, balance);
         break;
       }
       case "cycle_opened": {
@@ -171,6 +232,7 @@ function checkRules(entries) {
       }
       case "cycle_closed": {
         const cycleId = e.cycleId;
+        checkMatches(e, cycleId);
         const c = castByCycle.get(cycleId);
         const expected = rank((shortlists.get(cycleId) ?? []).map((projectId) => ({ projectId, votes: c?.byProject.get(projectId) ?? 0 })));
         const recorded = (Array.isArray(p.tally) ? p.tally : []).map((r2) => ({ projectId: r2.projectId, votes: r2.votes }));
@@ -182,9 +244,12 @@ function checkRules(entries) {
         for (const [id, cents] of accrued) if (id <= cycleId) accruedSoFar += cents;
         const locked = closedPools.filter((x) => x.cycleId < cycleId).reduce((s, x) => s + x.amountCents, 0);
         const carriedIn = carried.filter((x) => x.cycleId < cycleId).reduce((s, x) => s + x.cents, 0);
-        const pool = accruedSoFar - locked + carriedIn;
+        let matchedSoFar = 0;
+        for (const [id, cents] of matched) if (id <= cycleId) matchedSoFar += cents;
+        const pool = accruedSoFar + matchedSoFar - locked + carriedIn;
         const own = accrued.get(cycleId) ?? 0;
-        if (e.amountCents !== pool || p.ownPoolCents !== own || p.carryInCents !== pool - own) {
+        const ownMatched = matched.get(cycleId) ?? 0;
+        if (e.amountCents !== pool || p.ownPoolCents !== own || int(p.matchedCents) !== ownMatched || p.carryInCents !== pool - own - ownMatched) {
           problems.push({ entryId: e.id, check: "pool", message: `${cycleId}'s pool should be ${pool}\xA2 (${own}\xA2 its own), not ${e.amountCents}\xA2` });
         }
         closedPools.push({ cycleId, amountCents: e.amountCents });
