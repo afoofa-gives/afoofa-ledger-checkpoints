@@ -128,6 +128,9 @@ function checkRules(entries) {
   const closed = /* @__PURE__ */ new Map();
   const awards = /* @__PURE__ */ new Map();
   const paid = /* @__PURE__ */ new Map();
+  const confirmations = /* @__PURE__ */ new Map();
+  const currentConfirmation = /* @__PURE__ */ new Map();
+  const payoutsByCycle = /* @__PURE__ */ new Map();
   const partnerBalance = /* @__PURE__ */ new Map();
   const pledges = /* @__PURE__ */ new Map();
   const pendingMatches = /* @__PURE__ */ new Map();
@@ -259,6 +262,9 @@ function checkRules(entries) {
       case "winner_confirmed": {
         const cycleId = e.cycleId;
         const c = closed.get(cycleId);
+        if (currentConfirmation.has(cycleId)) {
+          problems.push({ entryId: e.id, check: "winners", message: `${cycleId} is confirmed again without its earlier confirmation being reversed` });
+        }
         const excluded = new Set((Array.isArray(p.excluded) ? p.excluded : []).map((x) => x.projectId));
         const winners = Array.isArray(p.winners) ? p.winners : [];
         if (!c) {
@@ -277,9 +283,32 @@ function checkRules(entries) {
         }
         for (const w of winners) awards.set(`${cycleId}:${w.projectId}`, w.amountCents);
         carried.push({ cycleId, cents: int(p.carriedCents) });
+        confirmations.set(e.id, { cycleId, projectIds: winners.map((w) => w.projectId) });
+        currentConfirmation.set(cycleId, e.id);
+        break;
+      }
+      case "admin_correction": {
+        const target = confirmations.get(int(p.reverses));
+        if (!target) break;
+        const { cycleId } = target;
+        if (currentConfirmation.get(cycleId) !== int(p.reverses)) {
+          problems.push({ entryId: e.id, check: "winners", message: `reverses a confirmation of ${cycleId} that isn't its current one` });
+          break;
+        }
+        if ((payoutsByCycle.get(cycleId) ?? 0) > 0) {
+          problems.push({ entryId: e.id, check: "winners", message: `reverses ${cycleId}'s confirmation after a payout on it` });
+        }
+        if (closedPools.some((x) => x.cycleId > cycleId)) {
+          problems.push({ entryId: e.id, check: "winners", message: `reverses ${cycleId}'s confirmation after a later cycle closed` });
+        }
+        for (const projectId of target.projectIds) awards.delete(`${cycleId}:${projectId}`);
+        const at = carried.findIndex((x) => x.cycleId === cycleId);
+        if (at >= 0) carried.splice(at, 1);
+        currentConfirmation.delete(cycleId);
         break;
       }
       case "payout_sent": {
+        payoutsByCycle.set(e.cycleId, (payoutsByCycle.get(e.cycleId) ?? 0) + 1);
         const key = `${e.cycleId}:${String(p.projectId)}`;
         const total = (paid.get(key) ?? 0) + e.amountCents;
         paid.set(key, total);
