@@ -38,4 +38,4 @@ Names, email addresses and payment references are never published. Each giver ap
 
 ## Licence
 
-MIT, © AFOOFA Inc. See `LICENSE`.
+MIT, © Afoofa Gives Inc. See `LICENSE`.
