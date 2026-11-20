@@ -9,21 +9,24 @@ This repository holds:
 - `checkpoints/<chain>/YYYY/MM/YYYY-MM-DD.json`: one checkpoint per day, as `{ "chain", "date", "entryId", "hash" }`.
 - `verify.mjs`: a self-contained verifier. It needs Node.js 22 or later and nothing else, and makes no network requests unless you ask it to.
 
-The chain named `test` holds test-mode gifts from before launch. Real gifts will start a new chain, `live`.
+There are two chains:
+
+- **`live`:** real gifts and votes, from the private beta's first gift on 19 November 2026. This is the ledger afoofa's [transparency page](https://afoofa-platform.vercel.app/transparency) publishes.
+- **`test`:** test-mode gifts made before launch (October to November 2026). It's closed: nothing is added to it, and its checkpoints stay here for the record.
 
 ## Verify the ledger yourself
 
 1. **Download the ledger.** On afoofa's [transparency page](https://afoofa-platform.vercel.app/transparency), download each monthly ledger file (for example `2026-11.json`).
-2. **Download the verifier and a checkpoint** from this repository: `verify.mjs`, and the newest file under `checkpoints/`.
+2. **Download the verifier and a checkpoint** from this repository: `verify.mjs`, and the newest file under `checkpoints/live/`.
 3. **Run it:**
 
    ```bash
-   node verify.mjs 2026-10.json 2026-11.json --checkpoint 2026-11-06.json
+   node verify.mjs 2026-11.json --checkpoint 2026-11-20.json
    ```
 
    It prints the number of entries, the newest entry's id and hash, whether the checkpoint matched, and `OK: the export verifies`, or the first problem it finds and `FAILED.`
 
-   It can also download the monthly files itself: `node verify.mjs --site https://afoofa-platform.vercel.app --checkpoint <file>`.
+   Give it every monthly file, oldest first. It can also download them itself: `node verify.mjs --site https://afoofa-platform.vercel.app --checkpoint <file>`.
 
 To see it catch a change, edit a number in one of the files (an entry's `amountCents`, say) and run it again: it fails at that entry.
 
