@@ -136,6 +136,11 @@ function checkRules(entries) {
   const pendingMatches = /* @__PURE__ */ new Map();
   const matched = /* @__PURE__ */ new Map();
   let rateInForce = null;
+  const firstGift = /* @__PURE__ */ new Map();
+  const countedPayment = /* @__PURE__ */ new Map();
+  const countedDollars = /* @__PURE__ */ new Map();
+  const referralVotes = /* @__PURE__ */ new Map();
+  const operatingBalance = /* @__PURE__ */ new Map();
   const checkMatches = (closing, cycleId) => {
     const applied = pendingMatches.get(cycleId) ?? [];
     pendingMatches.delete(cycleId);
@@ -317,6 +322,37 @@ function checkRules(entries) {
         else if (total > award) problems.push({ entryId: e.id, check: "payouts", message: `${key} is paid ${total}\xA2 on an award of ${award}\xA2` });
         break;
       }
+    }
+    if (e.entryType === "payment_settled" && e.account && e.payment) {
+      const at = Date.parse(e.createdAt);
+      if (p.reverses === void 0 && !firstGift.has(e.account)) firstGift.set(e.account, at);
+      const first = firstGift.get(e.account);
+      if (first !== void 0 && at <= first + WINDOW_MS && p.reverses === void 0) countedPayment.set(e.payment, e.account);
+      if (countedPayment.get(e.payment) === e.account) countedDollars.set(e.account, (countedDollars.get(e.account) ?? 0) + int(p.dollars));
+    }
+    if ((e.entryType === "refund" || e.entryType === "chargeback") && e.payment && countedPayment.has(e.payment)) {
+      const owner = countedPayment.get(e.payment);
+      countedDollars.set(owner, (countedDollars.get(owner) ?? 0) - int(p.dollars));
+    }
+    if (e.entryType === "referral_vote" && e.account) {
+      const recruit = String(p.recruit);
+      const key = `${e.account}|${recruit}`;
+      const held = (referralVotes.get(key) ?? 0) + e.votes;
+      referralVotes.set(key, held);
+      const earned = Math.floor(Math.max(0, countedDollars.get(recruit) ?? 0) / 10);
+      if (recruit === e.account) problems.push({ entryId: e.id, check: "referrals", message: `${e.account} earns recruiting votes on their own gifts` });
+      else if (Math.abs(e.votes) !== 1 || e.votes > 0 && held > earned)
+        problems.push({ entryId: e.id, check: "referrals", message: `${e.account} holds ${held} recruiting votes for ${recruit}, who has earned them ${earned}` });
+    }
+    if (e.entryType === "operating_gift_received") {
+      const id = String(p.partnerId);
+      operatingBalance.set(id, (operatingBalance.get(id) ?? 0) + int(p.netCents));
+    }
+    if (e.entryType === "fee_subsidized") {
+      const id = String(p.partnerId);
+      const left = (operatingBalance.get(id) ?? 0) - e.amountCents;
+      operatingBalance.set(id, left);
+      if (left < 0) problems.push({ entryId: e.id, check: "operating", message: `${id}'s operating gift covers more fees than it gave` });
     }
     if (e.account && e.votes !== 0) {
       const balance = (balances.get(e.account) ?? 0) + e.votes;
